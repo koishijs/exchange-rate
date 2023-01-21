@@ -1,0 +1,28 @@
+{
+  "name": "koishi-plugin-exchange-rate",
+  "description": "Exchange rate query",
+  "version": "0.1.0",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "dist"
+  ],
+  "license": "MIT",
+  "scripts": {},
+  "keywords": [
+    "chatbot",
+    "koishi",
+    "plugin"
+  ],
+  "author": "LittleC <i@ltlec.com>",
+  "koishi": {
+    "description": {
+      "en": "Exchange rate query",
+      "zh": "汇率转换"
+    }
+  },
+  "peerDependencies": {
+    "koishi": "^4.11.1"
+  }
+}
