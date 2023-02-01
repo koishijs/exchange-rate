@@ -28,28 +28,22 @@ export async function apply(ctx: Context) {
       let { from, to, amount } = options
       from = from.toUpperCase()
       to = to.toUpperCase()
-      if (symbols.includes(from) && symbols.includes(to)) {
+      if (symbols.includes(from) && symbols.includes(to) && from !== to) {
         let r = await ctx.http.get(`https://api.exchangerate.host/convert`, {
           params: { from, to, amount }
         })
         if (r.info.rate) return `${amount} ${from} = ${r.result} ${to} (仅供参考)`
       }
-      if (symbols.includes(to)) {
-        let r = await ctx.http.get(`https://api.exchangerate.host/convert`, {
-          params: { to: 'EUR', source: 'crypto', amount, from }
-        })
-        if (!r.info.rate) return '货币不存在'
-        let r2 = await ctx.http.get(`https://api.exchangerate.host/convert`, {
-          params: { from: 'EUR', to, amount: r.result }
-        })
-        return `${amount} ${from} = ${r2.result} ${to} (虚拟货币转现实货币, 仅供参考)`
-      } else {
-        let r = await ctx.http.get(`https://api.exchangerate.host/latest`, {
-          params: { base: to, source: 'crypto', amount }
-        })
-        if (r.base !== to) return '货币不存在'
-        if (!r.rates[from]) return '输入货币不存在'
-        return `${amount} ${from} = ${r.rates[from]} ${to} (虚拟货币转虚拟货币, 仅供参考)`
-      }
+      // let r = await ctx.http.get(`https://api.exchangerate.host/latest`, {
+      //   params: { base: from, symbols: 'EUR', source: 'crypto', amount }
+      // })
+      // // if (!r.info.rate) return '货币不存在'
+      // let eur = r.rates.EUR
+      // let r2 = await ctx.http.get(`https://api.exchangerate.host/latest`, {
+      //   params: { base: 'EUR', symbols: to, source: symbols.includes(to) ? 'ecb' : 'crypto' }
+      // })
+      // console.log(r, r2)
+      // let target = Math.floor(1 / eur * r2.rates[to] * 100000) / 100000
+      // return `${amount} ${from} = ${target} ${to} (仅供参考)`
     })
 }
