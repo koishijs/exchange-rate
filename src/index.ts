@@ -7,8 +7,8 @@ export interface Config { }
 export const Config: Schema<Config> = Schema.object({})
 
 export async function apply(ctx: Context) {
-  let _symbols = await ctx.http.get('https://api.exchangerate.host/symbols')
-  const symbols = Object.keys(_symbols.symbols)
+  let _symbols = await ctx.http.get('https://www.mastercard.com.cn/settlement/currencyrate/settlement-currencies')
+  const symbols = _symbols.data.currencies.map(v => v.alphaCd)
 
   // write your plugin here
   ctx.command('exchange', '汇率查询')
@@ -29,21 +29,17 @@ export async function apply(ctx: Context) {
       from = from.toUpperCase()
       to = to.toUpperCase()
       if (symbols.includes(from) && symbols.includes(to) && from !== to) {
-        let r = await ctx.http.get(`https://api.exchangerate.host/convert`, {
-          params: { from, to, amount }
+        let r = await ctx.http.get(`https://www.mastercard.com.cn/settlement/currencyrate/conversion-rate`, {
+          params: {
+            fxDate: '0000-00-00',
+            transCurr: from,
+            crdhldBillCurr: to,
+            bankFee: '0',
+            transAmt: amount
+          }
         })
-        if (r.info.rate) return `${amount} ${from} = ${r.result} ${to} (仅供参考)`
+        // console.log(r)
+        if (r?.data) return `${amount} ${from} = ${r.data.crdhldBillAmt} ${to} (仅供参考)`
       }
-      // let r = await ctx.http.get(`https://api.exchangerate.host/latest`, {
-      //   params: { base: from, symbols: 'EUR', source: 'crypto', amount }
-      // })
-      // // if (!r.info.rate) return '货币不存在'
-      // let eur = r.rates.EUR
-      // let r2 = await ctx.http.get(`https://api.exchangerate.host/latest`, {
-      //   params: { base: 'EUR', symbols: to, source: symbols.includes(to) ? 'ecb' : 'crypto' }
-      // })
-      // console.log(r, r2)
-      // let target = Math.floor(1 / eur * r2.rates[to] * 100000) / 100000
-      // return `${amount} ${from} = ${target} ${to} (仅供参考)`
     })
 }

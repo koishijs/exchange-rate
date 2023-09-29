@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-exchange-rate",
   "description": "Exchange rate query",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -9,7 +9,6 @@
     "dist"
   ],
   "license": "MIT",
-  "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
@@ -23,6 +22,6 @@
     }
   },
   "peerDependencies": {
-    "koishi": "^4.11.1"
+    "koishi": "^4.14.6"
   }
 }
