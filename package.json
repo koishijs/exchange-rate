@@ -1,16 +1,17 @@
 {
   "name": "koishi-plugin-exchange-rate",
   "description": "Exchange rate query",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
-    "lib"
+    "lib",
+    "dist"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/koishijs/exchange-rate"
+    "url": "git+https://github.com/koishijs/exchange-rate.git"
   },
   "keywords": [
     "chatbot",
