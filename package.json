@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-exchange-rate",
   "description": "Exchange rate query",
-  "version": "0.3.2",
+  "version": "1.0.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -19,6 +19,9 @@
     "plugin"
   ],
   "author": "LittleC <i@ltlec.com>",
+  "maintainers": [
+    "SaarChaffee <saarchaffee@qq.com>"
+  ],
   "koishi": {
     "description": {
       "en": "Exchange rate query",
