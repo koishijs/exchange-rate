@@ -19,10 +19,10 @@ yarn add koishi-plugin-exchange-rate
 注册命令为：
 
 ```text
-exchange [query:text]
+exchange <query:text>
 ```
 
-`query` 使用以下形式，其中金额可以是 `0`：
+`query` 为必填参数，使用以下形式，其中金额可以是 `0`：
 
 ```text
 exchange 20 USD to CNY
@@ -38,15 +38,6 @@ exchange USD 20 to CNY
 ```
 
 快捷方式只匹配完整、有效的查询；普通聊天文本不会被拦截或重复处理。
-
-为兼容旧用法，仍支持选项。`-t` 未提供时使用 `CNY`：
-
-```text
-exchange -a 20 -f USD -t GBP
-exchange -a 20 -f USD
-```
-
-`-a` 和 `-f` 是发起旧式查询所必需的；缺少必要选项时不会访问数据源。
 
 ### 货币别名
 

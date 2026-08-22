@@ -75,7 +75,6 @@ function createCommandHarness({
   okxGet = async (url) => url.includes('instruments') ? okxCatalog : { code: '0', data: [{ instId: 'BTC-USDT', bidPx: '67234.10', askPx: '67235.10' }] },
   configOverrides = {},
 } = {}) {
-  const middlewares = []
   const events = {}
   const extensions = []
   const intervals = []
@@ -97,12 +96,10 @@ function createCommandHarness({
     logger: () => ({ warn: (...args) => warnings.push(args) }),
     on: (name, handler) => { events[name] = handler },
     setInterval: (handler, interval) => intervals.push({ handler, interval }),
-    middleware: (handler) => middlewares.push(handler),
     command: (definition, description) => {
-      const command = { definition, description, examples: [], options: [], shortcuts: [], action: undefined }
+      const command = { definition, description, examples: [], shortcuts: [], action: undefined }
       const builder = {
         example: (example) => { command.examples.push(example); return builder },
-        option: (name, declaration, config) => { command.options.push({ name, declaration, config }); return builder },
         shortcut: (matcher, config) => { command.shortcuts.push({ matcher, config }); return builder },
         action: (handler) => { command.action = handler; return builder },
       }
@@ -110,13 +107,12 @@ function createCommandHarness({
       return builder
     },
   }, { ...config, ...configOverrides })
-  assert.equal(middlewares.length, 0)
   assert.equal(commands.length, 1)
   return { command: commands[0], events, extensions, intervals, warnings }
 }
 
-function executeQuery(setup, query, options = {}) {
-  return setup.command.action({ options }, query)
+function executeQuery(setup, query) {
+  return setup.command.action({}, query)
 }
 
 function createKoishiCommandContext() {
@@ -167,6 +163,7 @@ function createKoishiCommandContext() {
 
 test('parser accepts aliases and 2-10 letter asset codes', () => {
   assert.deepEqual(parseExchangeQuery('123usd to gbp'), { amount: 123, base: 'USD', quote: 'GBP' })
+  assert.deepEqual(parseExchangeQuery('0usd to cny'), { amount: 0, base: 'USD', quote: 'CNY' })
   assert.deepEqual(parseExchangeQuery('US$ 12.5 to 人民币'), { amount: 12.5, base: 'USD', quote: 'CNY' })
   assert.deepEqual(parseExchangeQuery('￥0.5toJP¥'), { amount: 0.5, base: 'CNY', quote: 'JPY' })
   assert.deepEqual(parseExchangeQuery('英镑1toEUR'), { amount: 1, base: 'GBP', quote: 'EUR' })
@@ -411,14 +408,9 @@ test('crypto formatter rejects invalid amounts and tickers', () => {
   }
 })
 
-test('command registration uses the shared anchored shortcut without middleware', async () => {
+test('command registration uses the shared anchored shortcut', async () => {
   const setup = createCommandHarness({ configOverrides: { proxy: 'http://127.0.0.1:7890', catalogRefreshInterval: 123 } })
-  assert.equal(setup.command.definition, 'exchange [query:text]')
-  assert.deepEqual(setup.command.options, [
-    { name: 'amount', declaration: '-a <amount:number>', config: undefined },
-    { name: 'from', declaration: '-f <currency>', config: undefined },
-    { name: 'to', declaration: '-t <currency>', config: { fallback: 'CNY' } },
-  ])
+  assert.equal(setup.command.definition, 'exchange <query:text>')
   assert.equal(setup.command.shortcuts.length, 1)
   const shortcut = setup.command.shortcuts[0]
   assert.equal(shortcut.matcher.source.startsWith('^'), true)
@@ -434,14 +426,15 @@ test('command registration uses the shared anchored shortcut without middleware'
   await Promise.resolve()
 })
 
-test('real Koishi Context executes shortcut and legacy fallback once', async () => {
+test('real Koishi Context executes shortcut and command once', async () => {
   const setup = createKoishiCommandContext()
   const shortcut = await setup.execute('20 usd to cny')
+  assert.equal(shortcut.length, 1)
   assert.equal(shortcut[0].attrs.content, '20 USD ≈ 140 CNY')
   assert.equal(setup.getRateCalls(), 1)
 
-  const legacy = await setup.executeCommand('exchange -a 0 -f USD')
-  assert.equal(legacy, '0 USD ≈ 0 CNY')
+  const command = await setup.executeCommand('exchange 20 usd to cny')
+  assert.equal(command, '20 USD ≈ 140 CNY')
   assert.equal(setup.getRateCalls(), 1)
 
   assert.equal(await setup.execute('please convert 20 usd to cny'), undefined)
@@ -482,32 +475,6 @@ test('seeded fiat commands do not wait for crypto catalogs', async () => {
   })
   assert.equal(await executeQuery(setup, '1usd to gbp'), '1 USD ≈ 0.8 GBP')
   assert.equal(cryptoRequests, 0)
-})
-
-test('command shares the router with old options and accepts zero amounts', async () => {
-  let rateCalls = 0
-  const setup = createCommandHarness({
-    frankfurterGet: async (url) => {
-      if (url.endsWith('/currencies')) return currencies
-      rateCalls += 1
-      assert.equal(url, 'https://api.frankfurter.dev/v2/rate/USD/CNY')
-      return rateResponse('USD', 'CNY', 7)
-    },
-  })
-  assert.equal(await executeQuery(setup, undefined, { amount: 0, from: 'usd', to: 'CNY' }), '0 USD ≈ 0 CNY')
-  assert.equal(rateCalls, 1)
-})
-
-test('command skips incomplete legacy options without requests', async () => {
-  let calls = 0
-  const setup = createCommandHarness({
-    frankfurterGet: async () => { calls += 1; return currencies },
-    binanceGet: async () => { calls += 1; return binanceCatalog },
-    okxGet: async () => { calls += 1; return okxCatalog },
-  })
-  assert.equal(await executeQuery(setup, undefined, { from: 'USD', to: 'CNY' }), undefined)
-  assert.equal(await executeQuery(setup, undefined, { amount: 1, to: 'CNY' }), undefined)
-  assert.equal(calls, 0)
 })
 
 test('command keeps fiat routing and crypto catalogs independent of Frankfurter failure', async () => {

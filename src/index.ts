@@ -196,19 +196,10 @@ export function apply(ctx: Context, config: Config) {
     crypto.dispose()
     catalog.dispose()
   })
-  ctx.command('exchange [query:text]', '汇率查询')
+  ctx.command('exchange <query:text>', '汇率查询')
     .example('exchange 20 usd to cny')
-    .example('exchange -f usd -a 20')
-    .option('amount', '-a <amount:number>')
-    .option('from', '-f <currency>')
-    .option('to', '-t <currency>', { fallback: 'CNY' })
     .shortcut(exchangeQueryPattern, { args: ['$1'] })
-    .action(async ({ options }, query) => {
-      if (query) return handleQuery(query)
-      const { amount, from, to } = options ?? {}
-      if (amount === undefined || !from || !to) return
-      return handleQuery(`${amount}${from} to ${to}`)
-    })
+    .action((_, query) => handleQuery(query))
 }
 
 interface CryptoProviderResult {
