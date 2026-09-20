@@ -1,0 +1,9 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    uses: cordiverse/workflows/.github/workflows/publish.yml@main
