@@ -1,12 +1,11 @@
 {
   "name": "koishi-plugin-exchange-rate",
   "description": "Exchange rate query",
-  "version": "0.3.2",
+  "version": "1.0.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
-    "lib",
-    "dist"
+    "lib"
   ],
   "license": "MIT",
   "repository": {
@@ -25,7 +24,16 @@
       "zh": "汇率转换"
     }
   },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/exchange-rate.test.js",
+    "prepublishOnly": "npm test"
+  },
   "peerDependencies": {
-    "koishi": "^4.16.8"
+    "koishi": "^4.18.8"
+  },
+  "devDependencies": {
+    "koishi": "^4.18.8",
+    "typescript": "^5.8.3"
   }
 }
