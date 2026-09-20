@@ -10,4 +10,4 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    uses: cordiverse/workflows/.github/workflows/publish.yml@main
+    uses: koikirin/buildplate/.github/workflows/publish_npm.buildplate.yml@v1
