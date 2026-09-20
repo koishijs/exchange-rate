@@ -6,4 +6,7 @@ on:
 
 jobs:
   publish:
+    permissions:
+      id-token: write
+      contents: read
     uses: cordiverse/workflows/.github/workflows/publish.yml@main
