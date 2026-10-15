@@ -37,6 +37,11 @@ export const exchangeQueryPattern = new RegExp(
   'i',
 )
 
+export const chartQueryPattern = new RegExp(
+  `^${whitespacePattern}(?<base>${currencyPattern})${whitespacePattern}to${whitespacePattern}(?<quote>${currencyPattern})${whitespacePattern}$`,
+  'i',
+)
+
 function normalizeCurrency(value: string): string | null {
   const normalized = value.normalize('NFKC')
   const upperCase = normalized.toUpperCase()
@@ -67,4 +72,20 @@ export function parseExchangeQuery(input: string): ExchangeQuery | null {
   }
 
   return { amount, base, quote }
+}
+
+export interface ChartQuery {
+  base: string
+  quote: string
+}
+
+export function parseChartQuery(input: string): ChartQuery | null {
+  if (/[\r\n]/.test(input)) return null
+  const match = chartQueryPattern.exec(input)
+  if (!match?.groups) return null
+
+  const base = normalizeCurrency(match.groups.base)
+  const quote = normalizeCurrency(match.groups.quote)
+  if (!base || !quote) return null
+  return { base, quote }
 }

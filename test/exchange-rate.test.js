@@ -4,14 +4,17 @@ const { Argv, Context } = require('koishi')
 
 const {
   BridgeResolver,
+  buildChartSource,
   CryptoResolver,
   ExchangeCatalog,
+  fetchHistoryRates,
   RateError,
   RateResolver,
   apply,
   formatCryptoResult,
   formatExchangeResult,
   parseBinanceTicker,
+  parseChartQuery,
   parseExchangeQuery,
   parseOkxTicker,
 } = require('../lib/index.js')
@@ -29,6 +32,7 @@ const config = {
   cryptoCacheTtl: 5_000,
   cryptoPrecision: 2,
   catalogRefreshInterval: 6 * 60 * 60 * 1000,
+  chartDays: 30,
 }
 
 const currencies = [
@@ -74,6 +78,7 @@ function createCommandHarness({
   binanceGet = async (url) => url.includes('exchangeInfo') ? binanceCatalog : { symbol: 'BTCUSDT', bidPrice: '67234.12', askPrice: '67235.08' },
   okxGet = async (url) => url.includes('instruments') ? okxCatalog : { code: '0', data: [{ instId: 'BTC-USDT', bidPx: '67234.10', askPx: '67235.10' }] },
   configOverrides = {},
+  typst,
 } = {}) {
   const events = {}
   const extensions = []
@@ -93,6 +98,7 @@ function createCommandHarness({
   }
   apply({
     http,
+    typst,
     logger: () => ({ warn: (...args) => warnings.push(args) }),
     on: (name, handler) => { events[name] = handler },
     setInterval: (handler, interval) => intervals.push({ handler, interval }),
@@ -107,8 +113,9 @@ function createCommandHarness({
       return builder
     },
   }, { ...config, ...configOverrides })
-  assert.equal(commands.length, 1)
-  return { command: commands[0], events, extensions, intervals, warnings }
+  assert.equal(commands.length, 2)
+  assert.equal(commands[1].definition, 'exchange.chart <query:text>')
+  return { command: commands[0], chartCommand: commands[1], events, extensions, intervals, warnings }
 }
 
 function executeQuery(setup, query) {
@@ -737,4 +744,177 @@ test('bridge reuses crypto and FX caches, and crypto formatting preserves small 
     formatCryptoResult({ amount: 1, base: 'BTC', quote: 'USDT' }, { bid: 1e-20, ask: 2e-20 }, 2),
     '1 BTC ≈ 1e-20 / 2e-20 USDT',
   )
+})
+
+const historySeries = [
+  { date: '2026-10-09', base: 'USD', quote: 'CNY', rate: 6.692 },
+  { date: '2026-10-11', base: 'USD', quote: 'CNY', rate: 6.6901 },
+  { date: '2026-10-10', base: 'USD', quote: 'CNY', rate: 6.6907 },
+]
+
+function historyResponse(base, quote) {
+  // frankfurter v2 返回包含 base===quote 的 identity 记录
+  return [...historySeries, { date: '2026-10-12', base, quote: base, rate: 1 }]
+}
+
+function createTypstStub() {
+  const calls = { files: [], formats: [] }
+  return {
+    calls,
+    compiler() {
+      const session = {
+        mainFile(path) { calls.mainFile = path; return session },
+        file(path, source) { calls.files.push({ path, source }); return session },
+        to(format) { calls.formats.push(format); return Promise.resolve('<svg>stub</svg>') },
+      }
+      return session
+    },
+  }
+}
+
+test('parseChartQuery accepts pairs with aliases', () => {
+  assert.deepEqual(parseChartQuery('usd to cny'), { base: 'USD', quote: 'CNY' })
+  assert.deepEqual(parseChartQuery(' $ to RMB '), { base: 'USD', quote: 'CNY' })
+  assert.equal(parseChartQuery('1 usd to cny'), null)
+  assert.equal(parseChartQuery('usd cny'), null)
+  assert.equal(parseChartQuery('usd to'), null)
+})
+
+test('fetchHistoryRates sorts and filters series records', async () => {
+  const requests = []
+  const http = {
+    get: async (url) => {
+      requests.push(url)
+      return historyResponse('USD', 'CNY')
+    },
+  }
+  const series = await fetchHistoryRates(http, 'USD', 'CNY', { timeout: 10_000, days: 30 })
+  assert.match(requests[0], /^https:\/\/api\.frankfurter\.dev\/v2\/rates\?from=\d{4}-\d{2}-\d{2}&to=\d{4}-\d{2}-\d{2}&base=USD&quotes=CNY$/)
+  assert.deepEqual(series, [
+    { date: '2026-10-09', rate: 6.692 },
+    { date: '2026-10-10', rate: 6.6907 },
+    { date: '2026-10-11', rate: 6.6901 },
+  ])
+})
+
+test('fetchHistoryRates maps service errors to rate errors', async () => {
+  const http = { get: async () => { const error = new Error('not found'); error.status = 404; throw error } }
+  await assert.rejects(
+    fetchHistoryRates(http, 'USD', 'XXX', { timeout: 10_000, days: 30 }),
+    (error) => error instanceof RateError && error.kind === 'unsupported',
+  )
+  const short = { get: async () => [{ date: '2026-10-09', base: 'USD', quote: 'CNY', rate: 6.692 }] }
+  await assert.rejects(
+    fetchHistoryRates(short, 'USD', 'CNY', { timeout: 10_000, days: 30 }),
+    (error) => error instanceof RateError && error.kind === 'unsupported',
+  )
+})
+
+test('buildChartSource renders a typst line chart', () => {
+  const source = buildChartSource('USD', 'CNY', [
+    { date: '2026-10-09', rate: 6.692 },
+    { date: '2026-10-10', rate: 6.6907 },
+    { date: '2026-10-11', rate: 6.6901 },
+  ])
+  assert.match(source, /\[USD\/CNY\]/)
+  assert.match(source, /curve\.move\(/)
+  assert.equal((source.match(/curve\.line\(/g) || []).length, 5)
+  assert.match(source, /stroke: 1\.5pt \+ rgb\("#cf222e"\)/)
+  assert.match(source, /-0\.03%/)
+})
+
+test('chart command requires the typst service', async () => {
+  const setup = createCommandHarness()
+  assert.equal(
+    await setup.chartCommand.action({}, 'usd to gbp'),
+    '图表功能需要 typst 服务，请先安装 cordis-plugin-typst。',
+  )
+})
+
+test('chart command renders a history chart as svg image', async () => {
+  const typst = createTypstStub()
+  const setup = createCommandHarness({
+    frankfurterGet: async (url) => {
+      if (url.includes('/currencies')) return currencies
+      const base = /base=([A-Z]{3})/.exec(url)?.[1]
+      const quote = /quotes=([A-Z]{3})/.exec(url)?.[1]
+      return historySeries.map((record) => ({ ...record, base, quote }))
+    },
+    typst,
+  })
+  const result = await setup.chartCommand.action({}, 'usd to gbp')
+  assert.equal(result.type, 'img')
+  assert.match(result.attrs.src, /^data:image\/svg\+xml;base64,/)
+  const svg = Buffer.from(result.attrs.src.split(',')[1], 'base64').toString('utf8')
+  assert.equal(svg, '<svg>stub</svg>')
+  assert.deepEqual(typst.calls.formats, ['plain-svg'])
+  assert.match(typst.calls.files[0].source, /\[USD\/GBP\]/)
+})
+
+test('chart command rejects non-fiat pairs and service failures', async () => {
+  const typst = createTypstStub()
+  const setup = createCommandHarness({ typst })
+  assert.equal(
+    await setup.chartCommand.action({}, 'btc to usdt'),
+    '历史走势图暂仅支持法币货币对。',
+  )
+  const failing = createCommandHarness({
+    typst,
+    frankfurterGet: async (url) => {
+      if (url.includes('/currencies')) return currencies
+      const error = new Error('boom')
+      throw error
+    },
+  })
+  assert.equal(await failing.chartCommand.action({}, 'usd to gbp'), '图表生成失败，请稍后再试。')
+  assert.equal(failing.warnings.length, 1)
+})
+
+test('buildChartSource applies the live rate to the latest point', () => {
+  const series = [
+    { date: '2026-10-09', rate: 6.7 },
+    { date: '2026-10-10', rate: 6.69 },
+    { date: '2026-10-11', rate: 6.68 },
+  ]
+  const stale = buildChartSource('USD', 'CNY', series)
+  assert.match(stale, /weight: 600, fill: rgb\("#cf222e"\)\)\[6\.68\]/)
+  assert.match(stale, /\[-0\.30%\]/)
+  const live = buildChartSource('USD', 'CNY', series, undefined, 6.75)
+  assert.match(live, /weight: 600, fill: rgb\("#1a7f37"\)\)\[6\.75\]/)
+  assert.match(live, /\[\+0\.75%\]/)
+})
+
+test('chart command feeds the live rate into the chart', async () => {
+  const typst = createTypstStub()
+  const setup = createCommandHarness({
+    frankfurterGet: async (url) => {
+      if (url.includes('/currencies')) return currencies
+      if (url.includes('/rate/')) return rateResponse('USD', 'GBP', 0.9)
+      return historySeries.map((record) => ({ ...record, base: 'USD', quote: 'GBP' }))
+    },
+    typst,
+  })
+  await setup.chartCommand.action({}, 'usd to gbp')
+  assert.match(typst.calls.files[0].source, /\[0\.9\]/)
+})
+
+test('bare pair queries route to the chart', async () => {
+  const typst = createTypstStub()
+  const setup = createCommandHarness({
+    frankfurterGet: async (url) => {
+      if (url.includes('/currencies')) return currencies
+      if (url.includes('/rate/')) return rateResponse('USD', 'GBP', 0.9)
+      return historySeries.map((record) => ({ ...record, base: 'USD', quote: 'GBP' }))
+    },
+    typst,
+  })
+  assert.equal(setup.chartCommand.shortcuts.length, 1)
+  const result = await executeQuery(setup, 'usd to gbp')
+  assert.equal(result.type, 'img')
+  assert.deepEqual(typst.calls.formats, ['plain-svg'])
+})
+
+test('amount queries still resolve conversions', async () => {
+  const setup = createCommandHarness()
+  assert.equal(await executeQuery(setup, '1 usd to gbp'), '1 USD ≈ 0.8 GBP')
 })

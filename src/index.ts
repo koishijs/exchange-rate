@@ -1,12 +1,18 @@
-import { Context, Schema } from 'koishi'
+import { Context, h, Schema } from 'koishi'
+import type TypstService from 'cordis-plugin-typst'
 import { BridgeResolver } from './bridge'
 import { CryptoProvider, ExchangeCatalog } from './catalog'
+import { buildChartSource, defaultTheme, fetchHistoryRates } from './chart'
 import { CryptoResolver, CryptoTicker } from './crypto'
-import { ExchangeQuery, exchangeQueryPattern, parseExchangeQuery } from './parser'
+import { chartQueryPattern, ExchangeQuery, exchangeQueryPattern, parseChartQuery, parseExchangeQuery } from './parser'
 import { ExchangeRate, RateError, RateResolver } from './rate'
 
 export const name = 'exchange-rate'
-export const inject = ['http']
+// typst 服务可选：未安装 cordis-plugin-typst 时插件仍可工作，仅图表功能不可用。
+export const inject = {
+  http: { required: true },
+  typst: { required: false },
+}
 
 export interface Config {
   cacheTtl: number
@@ -17,6 +23,8 @@ export interface Config {
   cryptoCacheTtl: number
   cryptoPrecision: number
   catalogRefreshInterval: number
+  chartDays: number
+  chartColorStyle: 'green-up' | 'red-up'
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -28,6 +36,11 @@ export const Config: Schema<Config> = Schema.object({
   cryptoCacheTtl: Schema.number().min(0).default(5 * 1000).description('加密货币行情缓存时间（毫秒）'),
   cryptoPrecision: Schema.number().min(0).max(12).default(2).description('加密货币行情小数位数'),
   catalogRefreshInterval: Schema.number().min(0).default(6 * 60 * 60 * 1000).description('交易对目录刷新间隔（毫秒，0 为禁用）'),
+  chartDays: Schema.number().min(7).max(3650).default(30).description('历史走势图回溯天数'),
+  chartColorStyle: Schema.union([
+    Schema.const('green-up').description('绿涨红跌'),
+    Schema.const('red-up').description('红涨绿跌'),
+  ]).default('green-up').description('走势图涨跌配色'),
 })
 
 function formatNumber(value: number, precision: number): string {
@@ -165,7 +178,8 @@ export function apply(ctx: Context, config: Config) {
   const handleQuery = async (input?: string) => {
     if (!input) return
     const query = parseExchangeQuery(input)
-    if (!query) return
+    // 不含数量的裸货币对（usd to cny）直接展示历史走势图
+    if (!query) return parseChartQuery(input) ? handleChartQuery(input) : undefined
     if (catalog.isFiat(query.base) && catalog.isFiat(query.quote)) {
       return handleFiatQuery(query)
     }
@@ -181,6 +195,40 @@ export function apply(ctx: Context, config: Config) {
     if (result.fiat) return handleFiatQuery(query)
     if (result.fiatUnavailable) return '汇率目录暂时不可用，请稍后再试。'
     return result.text
+  }
+  const handleChartQuery = async (input?: string) => {
+    if (!input) return
+    const typst: TypstService | undefined = (ctx as { typst?: TypstService }).typst
+    if (!typst) return '图表功能需要 typst 服务，请先安装 cordis-plugin-typst。'
+    const query = parseChartQuery(input)
+    if (!query) return
+    if (!catalog.isFiat(query.base) || !catalog.isFiat(query.quote)) {
+      return '历史走势图暂仅支持法币货币对。'
+    }
+
+    try {
+      const series = await fetchHistoryRates(ctx.http, query.base, query.quote, {
+        timeout: config.timeout,
+        days: config.chartDays,
+      })
+      const liveRate = await resolver.getRate(query.base, query.quote)
+        .then((rate) => rate.rate)
+        .catch(() => undefined)
+      const source = buildChartSource(query.base, query.quote, series, {
+        ...defaultTheme,
+        ...(config.chartColorStyle === 'red-up'
+          ? { upColor: defaultTheme.downColor, downColor: defaultTheme.upColor }
+          : {}),
+      }, liveRate)
+      const svg = await typst.compiler().mainFile('/index.typ').file('/index.typ', source).to('plain-svg')
+      return h.image(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+    } catch (error) {
+      if (error instanceof RateError && error.kind === 'unsupported') {
+        return '暂不支持该货币对的历史走势。'
+      }
+      logger.warn('Exchange-rate chart failed.', error)
+      return '图表生成失败，请稍后再试。'
+    }
   }
 
   ctx.on('ready', () => {
@@ -200,6 +248,10 @@ export function apply(ctx: Context, config: Config) {
     .example('exchange 20 usd to cny')
     .shortcut(exchangeQueryPattern, { args: ['$1'] })
     .action((_, query) => handleQuery(query))
+  ctx.command('exchange.chart <query:text>', '汇率历史走势图')
+    .example('exchange.chart usd to cny')
+    .shortcut(chartQueryPattern, { args: ['$1'] })
+    .action((_, query) => handleChartQuery(query))
 }
 
 interface CryptoProviderResult {
@@ -256,6 +308,7 @@ async function formatCryptoProviders(
 
 export { BridgeResolver } from './bridge'
 export { AssetKind, ExchangeCatalog } from './catalog'
+export { buildChartSource, fetchHistoryRates, HistoryPoint } from './chart'
 export { CryptoResolver, CryptoTicker, parseBinanceTicker, parseOkxTicker } from './crypto'
-export { exchangeQueryPattern, parseExchangeQuery } from './parser'
+export { chartQueryPattern, exchangeQueryPattern, parseChartQuery, parseExchangeQuery } from './parser'
 export { ExchangeRate, RateError, RateResolver } from './rate'
