@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-exchange-rate",
   "description": "Exchange rate query",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -36,5 +36,8 @@
     "cordis-plugin-typst": "^0.0.2",
     "koishi": "^4.18.8",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "sharp": "^0.35.5"
   }
 }

@@ -779,7 +779,7 @@ function createTypstStub() {
       const session = {
         mainFile(path) { calls.mainFile = path; return session },
         file(path, source) { calls.files.push({ path, source }); return session },
-        to(format) { calls.formats.push(format); return Promise.resolve('<svg>stub</svg>') },
+        to(format) { calls.formats.push(format); return Promise.resolve('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#ffffff"/></svg>') },
       }
       return session
     },
@@ -845,7 +845,7 @@ test('chart command requires the typst service', async () => {
   )
 })
 
-test('chart command renders a history chart as svg image', async () => {
+test('chart command renders a history chart as a jpeg image', async () => {
   const typst = createTypstStub()
   const setup = createCommandHarness({
     frankfurterGet: async (url) => {
@@ -858,9 +858,10 @@ test('chart command renders a history chart as svg image', async () => {
   })
   const result = await setup.chartCommand.action({}, 'usd to gbp')
   assert.equal(result.type, 'img')
-  assert.match(result.attrs.src, /^data:image\/svg\+xml;base64,/)
-  const svg = Buffer.from(result.attrs.src.split(',')[1], 'base64').toString('utf8')
-  assert.equal(svg, '<svg>stub</svg>')
+  assert.match(result.attrs.src, /^data:image\/jpeg;base64,/)
+  const jpeg = Buffer.from(result.attrs.src.split(',')[1], 'base64')
+  // JPEG SOI 标记
+  assert.equal(jpeg.subarray(0, 2).toString('hex'), 'ffd8')
   assert.deepEqual(typst.calls.formats, ['plain-svg'])
   assert.match(typst.calls.files[0].source, /\[USD\/GBP\]/)
 })

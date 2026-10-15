@@ -1,4 +1,5 @@
 import { Context, h, Schema } from 'koishi'
+import sharp from 'sharp'
 import type TypstService from 'cordis-plugin-typst'
 import { BridgeResolver } from './bridge'
 import { CryptoProvider, ExchangeCatalog } from './catalog'
@@ -204,7 +205,12 @@ export function apply(ctx: Context, config: Config) {
   })
   const renderChart = async (source: string, typst: TypstService) => {
     const svg = await typst.compiler().mainFile('/index.typ').file('/index.typ', source).to('plain-svg')
-    return h.image(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+    // 平台普遍不支持 SVG 发送，统一经 sharp 栅格化为 JPEG。
+    const jpeg = await sharp(Buffer.from(svg), { density: 144 })
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: 90 })
+      .toBuffer()
+    return h.image(jpeg, 'image/jpeg')
   }
   const handleCryptoChart = async (query: { base: string, quote: string }, typst: TypstService) => {
     await initializeProvider('binance')
