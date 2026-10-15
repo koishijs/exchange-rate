@@ -4,15 +4,18 @@ const { Argv, Context } = require('koishi')
 
 const {
   BridgeResolver,
+  buildCandlestickSource,
   buildChartSource,
   CryptoResolver,
   ExchangeCatalog,
+  fetchCryptoCandles,
   fetchHistoryRates,
   RateError,
   RateResolver,
   apply,
   formatCryptoResult,
   formatExchangeResult,
+  invertCandles,
   parseBinanceTicker,
   parseChartQuery,
   parseExchangeQuery,
@@ -61,6 +64,17 @@ const okxCatalog = {
   ],
 }
 
+const klinesTimes = [
+  Date.UTC(2026, 9, 9),
+  Date.UTC(2026, 9, 10),
+  Date.UTC(2026, 9, 11),
+]
+const klinesFixture = [
+  [klinesTimes[0], '62000', '63500', '61200', '62800'],
+  [klinesTimes[1], '62800', '64100', '62400', '63900'],
+  [klinesTimes[2], '63900', '64200', '63100', '63500'],
+]
+
 function rateResponse(base, quote, rate) {
   return { base, quote, date: '2026-08-21', rate }
 }
@@ -75,7 +89,7 @@ function createCatalog(clients = {}) {
 
 function createCommandHarness({
   frankfurterGet = async (url) => url.includes('/currencies') ? currencies : rateResponse('USD', 'GBP', 0.8),
-  binanceGet = async (url) => url.includes('exchangeInfo') ? binanceCatalog : { symbol: 'BTCUSDT', bidPrice: '67234.12', askPrice: '67235.08' },
+  binanceGet = async (url) => url.includes('exchangeInfo') ? binanceCatalog : url.includes('klines') ? klinesFixture : { symbol: 'BTCUSDT', bidPrice: '67234.12', askPrice: '67235.08' },
   okxGet = async (url) => url.includes('instruments') ? okxCatalog : { code: '0', data: [{ instId: 'BTC-USDT', bidPx: '67234.10', askPx: '67235.10' }] },
   configOverrides = {},
   typst,
@@ -851,12 +865,12 @@ test('chart command renders a history chart as svg image', async () => {
   assert.match(typst.calls.files[0].source, /\[USD\/GBP\]/)
 })
 
-test('chart command rejects non-fiat pairs and service failures', async () => {
+test('chart command rejects unsupported pairs and service failures', async () => {
   const typst = createTypstStub()
   const setup = createCommandHarness({ typst })
   assert.equal(
-    await setup.chartCommand.action({}, 'btc to usdt'),
-    '历史走势图暂仅支持法币货币对。',
+    await setup.chartCommand.action({}, 'aaa to bbb'),
+    '暂不支持该货币对的历史走势。',
   )
   const failing = createCommandHarness({
     typst,
@@ -917,4 +931,87 @@ test('bare pair queries route to the chart', async () => {
 test('amount queries still resolve conversions', async () => {
   const setup = createCommandHarness()
   assert.equal(await executeQuery(setup, '1 usd to gbp'), '1 USD ≈ 0.8 GBP')
+})
+
+const candleSeries = [
+  { date: '2026-10-09', open: 62000, high: 63500, low: 61200, close: 62800 },
+  { date: '2026-10-10', open: 62800, high: 64100, low: 62400, close: 63900 },
+  { date: '2026-10-11', open: 63900, high: 64200, low: 63100, close: 63500 },
+]
+
+test('fetchCryptoCandles parses and sorts klines', async () => {
+  const requests = []
+  const http = {
+    get: async (url, config) => {
+      requests.push({ url, params: config?.params })
+      return klinesFixture
+    },
+  }
+  const candles = await fetchCryptoCandles(http, 'BTCUSDT', { timeout: 10_000, days: 30 })
+  assert.deepEqual(requests[0], { url: '/api/v3/klines', params: { symbol: 'BTCUSDT', interval: '1d', limit: '30' } })
+  assert.deepEqual(candles, candleSeries)
+})
+
+test('fetchCryptoCandles maps service errors', async () => {
+  const http = { get: async () => { const error = new Error('bad'); error.status = 400; throw error } }
+  await assert.rejects(
+    fetchCryptoCandles(http, 'BTCUSDT', { timeout: 10_000, days: 30 }),
+    (error) => error instanceof RateError && error.kind === 'unsupported',
+  )
+})
+
+test('invertCandles swaps high and low with reciprocal prices', () => {
+  const inverted = invertCandles(candleSeries)
+  assert.deepEqual(inverted[0], {
+    date: '2026-10-09',
+    open: 1 / 62000,
+    high: 1 / 61200,
+    low: 1 / 63500,
+    close: 1 / 62800,
+  })
+})
+
+test('buildCandlestickSource renders ohlc candles', () => {
+  const source = buildCandlestickSource('BTC', 'USDT', candleSeries)
+  assert.match(source, /\[BTC\/USDT\]/)
+  assert.equal((source.match(/#rect\(width: [\d.]+pt, height: [\d.]+pt, fill: rgb\("#(?:1a7f37|cf222e)"/g) || []).length, 3)
+  assert.equal((source.match(/angle: 90deg/g) || []).length, 3)
+  assert.match(source, /\[63[0-9.]+\]/)
+  assert.match(source, /\[\+2\.42%\]/)
+})
+
+test('chart command renders crypto candles via binance klines', async () => {
+  const typst = createTypstStub()
+  const setup = createCommandHarness({ typst })
+  const result = await setup.chartCommand.action({}, 'btc to usdt')
+  assert.equal(result.type, 'img')
+  const source = typst.calls.files[0].source
+  assert.match(source, /\[BTC\/USDT\]/)
+  assert.match(source, /#rect\(/)
+})
+
+test('chart command renders reverse crypto pairs through inversion', async () => {
+  const typst = createTypstStub()
+  const setup = createCommandHarness({ typst })
+  const result = await setup.chartCommand.action({}, 'eth to btc')
+  assert.equal(result.type, 'img')
+  const source = typst.calls.files[0].source
+  assert.match(source, /\[ETH\/BTC\]/)
+  assert.match(source, /#rect\(/)
+})
+
+test('fetchCryptoCandles switches to hourly klines for short ranges', async () => {
+  const requests = []
+  const http = {
+    get: async (url, config) => {
+      requests.push(config?.params)
+      return klinesFixture
+    },
+  }
+  await fetchCryptoCandles(http, 'BTCUSDT', { timeout: 10_000, days: 30 })
+  await fetchCryptoCandles(http, 'BTCUSDT', { timeout: 10_000, days: 7 })
+  await fetchCryptoCandles(http, 'BTCUSDT', { timeout: 10_000, days: 3 })
+  assert.deepEqual(requests[0], { symbol: 'BTCUSDT', interval: '1d', limit: '30' })
+  assert.deepEqual(requests[1], { symbol: 'BTCUSDT', interval: '1h', limit: '168' })
+  assert.deepEqual(requests[2], { symbol: 'BTCUSDT', interval: '1h', limit: '72' })
 })
