@@ -13,6 +13,8 @@ const {
   RateError,
   RateResolver,
   apply,
+  chartQueryPattern,
+  exchangeQueryPattern,
   formatCryptoResult,
   formatExchangeResult,
   invertCandles,
@@ -35,7 +37,9 @@ const config = {
   cryptoCacheTtl: 5_000,
   cryptoPrecision: 2,
   catalogRefreshInterval: 6 * 60 * 60 * 1000,
-  chartDays: 30,
+  chartFiatDays: 30,
+  chartCryptoDays: 7,
+  chartMaxDays: 365,
 }
 
 const currencies = [
@@ -787,8 +791,14 @@ function createTypstStub() {
 }
 
 test('parseChartQuery accepts pairs with aliases', () => {
-  assert.deepEqual(parseChartQuery('usd to cny'), { base: 'USD', quote: 'CNY' })
-  assert.deepEqual(parseChartQuery(' $ to RMB '), { base: 'USD', quote: 'CNY' })
+  assert.deepEqual(parseChartQuery('usd to cny'), { base: 'USD', quote: 'CNY', days: undefined })
+  assert.deepEqual(parseChartQuery(' $ to RMB '), { base: 'USD', quote: 'CNY', days: undefined })
+  assert.deepEqual(parseChartQuery('usd to cny 30d'), { base: 'USD', quote: 'CNY', days: 30 })
+  assert.deepEqual(parseChartQuery('usd to cny 90D'), { base: 'USD', quote: 'CNY', days: 90 })
+  assert.deepEqual(parseChartQuery('usd to cny 30day'), { base: 'USD', quote: 'CNY', days: 30 })
+  assert.deepEqual(parseChartQuery('usd to cny 30days'), { base: 'USD', quote: 'CNY', days: 30 })
+  assert.deepEqual(parseChartQuery('usd to cny 0d'), { base: 'USD', quote: 'CNY', days: undefined })
+  assert.equal(parseChartQuery('usd to cny 30x'), null)
   assert.equal(parseChartQuery('1 usd to cny'), null)
   assert.equal(parseChartQuery('usd cny'), null)
   assert.equal(parseChartQuery('usd to'), null)
@@ -1015,4 +1025,53 @@ test('fetchCryptoCandles switches to hourly klines for short ranges', async () =
   assert.deepEqual(requests[0], { symbol: 'BTCUSDT', interval: '1d', limit: '30' })
   assert.deepEqual(requests[1], { symbol: 'BTCUSDT', interval: '1h', limit: '168' })
   assert.deepEqual(requests[2], { symbol: 'BTCUSDT', interval: '1h', limit: '72' })
+})
+
+test('shortcut patterns expose the full input as capture group 1', () => {
+  const chartMatch = chartQueryPattern.exec('usd to cny')
+  assert.equal(chartMatch[1], 'usd to cny')
+  assert.equal(chartMatch.groups.base, 'usd')
+  assert.equal(chartMatch.groups.quote, 'cny')
+  const exchangeMatch = exchangeQueryPattern.exec('20 usd to cny')
+  assert.equal(exchangeMatch[1], '20 usd to cny')
+})
+
+test('chart command honors day modifiers and clamps to chartMaxDays', async () => {
+  const requests = []
+  const frankfurterGet = async (url) => {
+    if (url.includes('/currencies')) return currencies
+    if (url.includes('/rate/')) return rateResponse('USD', 'GBP', 0.9)
+    requests.push(url)
+    return historySeries.map((record) => ({ ...record, base: 'USD', quote: 'GBP' }))
+  }
+  const typst = createTypstStub()
+  const setup = createCommandHarness({ frankfurterGet, typst })
+  await setup.chartCommand.action({}, 'usd to gbp 90d')
+  await setup.chartCommand.action({}, 'usd to gbp 7d')
+  const clamp = createCommandHarness({ frankfurterGet, typst, configOverrides: { chartMaxDays: 30 } })
+  await clamp.chartCommand.action({}, 'usd to gbp 90d')
+
+  const dayCount = (url) => {
+    const from = /from=(\d{4}-\d{2}-\d{2})/.exec(url)[1]
+    const to = /to=(\d{4}-\d{2}-\d{2})/.exec(url)[1]
+    return Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000)
+  }
+  assert.equal(dayCount(requests[0]), 90)
+  assert.equal(dayCount(requests[1]), 7)
+  assert.equal(dayCount(requests[2]), 30)
+})
+
+test('chart command passes day modifiers to crypto klines', async () => {
+  const klines = []
+  const binanceGet = async (url, config) => {
+    if (url.includes('exchangeInfo')) return binanceCatalog
+    if (url.includes('klines')) { klines.push(config?.params); return klinesFixture }
+    return { symbol: 'BTCUSDT', bidPrice: '1', askPrice: '1' }
+  }
+  const typst = createTypstStub()
+  const setup = createCommandHarness({ binanceGet, typst })
+  await setup.chartCommand.action({}, 'btc to usdt 30d')
+  await setup.chartCommand.action({}, 'btc to usdt 7d')
+  assert.deepEqual(klines[0], { symbol: 'BTCUSDT', interval: '1d', limit: '30' })
+  assert.deepEqual(klines[1], { symbol: 'BTCUSDT', interval: '1h', limit: '168' })
 })

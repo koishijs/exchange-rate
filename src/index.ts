@@ -24,7 +24,9 @@ export interface Config {
   cryptoCacheTtl: number
   cryptoPrecision: number
   catalogRefreshInterval: number
-  chartDays: number
+  chartFiatDays: number
+  chartCryptoDays: number
+  chartMaxDays: number
   chartColorStyle: 'green-up' | 'red-up'
 }
 
@@ -37,7 +39,9 @@ export const Config: Schema<Config> = Schema.object({
   cryptoCacheTtl: Schema.number().min(0).default(5 * 1000).description('加密货币行情缓存时间（毫秒）'),
   cryptoPrecision: Schema.number().min(0).max(12).default(2).description('加密货币行情小数位数'),
   catalogRefreshInterval: Schema.number().min(0).default(6 * 60 * 60 * 1000).description('交易对目录刷新间隔（毫秒，0 为禁用）'),
-  chartDays: Schema.number().min(7).max(3650).default(30).description('历史走势图回溯天数'),
+  chartFiatDays: Schema.number().min(2).max(3650).default(30).description('法币走势图默认回溯天数'),
+  chartCryptoDays: Schema.number().min(1).max(1000).default(7).description('加密货币走势图默认回溯天数'),
+  chartMaxDays: Schema.number().min(7).max(36500).default(365).description('走势图最大回溯天数（查询中的天数修饰不得超过）'),
   chartColorStyle: Schema.union([
     Schema.const('green-up').description('绿涨红跌'),
     Schema.const('red-up').description('红涨绿跌'),
@@ -212,15 +216,16 @@ export function apply(ctx: Context, config: Config) {
       .toBuffer()
     return h.image(jpeg, 'image/jpeg')
   }
-  const handleCryptoChart = async (query: { base: string, quote: string }, typst: TypstService) => {
+  const handleCryptoChart = async (query: { base: string, quote: string, days?: number }, typst: TypstService) => {
     await initializeProvider('binance')
     const direct = catalog.getPair('binance', query.base, query.quote)
     const reverse = direct ?? catalog.getReversePair('binance', query.base, query.quote)
     if (!reverse) return '暂不支持该货币对的历史走势。'
 
+    const days = query.days ? Math.min(query.days, config.chartMaxDays) : undefined
     const candles = await fetchCryptoCandles(binance, reverse.id, {
       timeout: config.timeout,
-      days: config.chartDays,
+      days: days ?? config.chartCryptoDays,
     })
     const oriented = direct ? candles : invertCandles(candles)
     return renderChart(buildCandlestickSource(query.base, query.quote, oriented, chartTheme()), typst)
@@ -232,11 +237,12 @@ export function apply(ctx: Context, config: Config) {
     const query = parseChartQuery(input)
     if (!query) return
 
+    const days = query.days ? Math.min(query.days, config.chartMaxDays) : undefined
     try {
       if (catalog.isFiat(query.base) && catalog.isFiat(query.quote)) {
         const series = await fetchHistoryRates(ctx.http, query.base, query.quote, {
           timeout: config.timeout,
-          days: config.chartDays,
+          days: days ?? config.chartFiatDays,
         })
         const liveRate = await resolver.getRate(query.base, query.quote)
           .then((rate) => rate.rate)

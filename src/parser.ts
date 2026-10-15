@@ -37,8 +37,11 @@ export const exchangeQueryPattern = new RegExp(
   'i',
 )
 
+// 外层捕获组供 shortcut 的 $1 引用完整输入（与 exchangeQueryPattern 一致），
+// 否则 $1 会命中命名组 base，只取到货币对前半段。
+// 尾部可选天数修饰：30d / 30day / 30days。
 export const chartQueryPattern = new RegExp(
-  `^${whitespacePattern}(?<base>${currencyPattern})${whitespacePattern}to${whitespacePattern}(?<quote>${currencyPattern})${whitespacePattern}$`,
+  `^(${whitespacePattern}(?<base>${currencyPattern})${whitespacePattern}to${whitespacePattern}(?<quote>${currencyPattern})${whitespacePattern}(?:(?<days>\\d{1,4})d(?:ays?)?${whitespacePattern})?)$`,
   'i',
 )
 
@@ -77,6 +80,7 @@ export function parseExchangeQuery(input: string): ExchangeQuery | null {
 export interface ChartQuery {
   base: string
   quote: string
+  days?: number
 }
 
 export function parseChartQuery(input: string): ChartQuery | null {
@@ -87,5 +91,6 @@ export function parseChartQuery(input: string): ChartQuery | null {
   const base = normalizeCurrency(match.groups.base)
   const quote = normalizeCurrency(match.groups.quote)
   if (!base || !quote) return null
-  return { base, quote }
+  const days = Number(match.groups.days)
+  return { base, quote, days: Number.isInteger(days) && days >= 1 ? days : undefined }
 }
