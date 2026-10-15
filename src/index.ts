@@ -2,7 +2,7 @@ import { Context, h, Schema } from 'koishi'
 import type TypstService from 'cordis-plugin-typst'
 import { BridgeResolver } from './bridge'
 import { CryptoProvider, ExchangeCatalog } from './catalog'
-import { buildChartSource, defaultTheme, fetchHistoryRates } from './chart'
+import { buildCandlestickSource, buildChartSource, defaultTheme, fetchCryptoCandles, fetchHistoryRates, invertCandles } from './chart'
 import { CryptoResolver, CryptoTicker } from './crypto'
 import { chartQueryPattern, ExchangeQuery, exchangeQueryPattern, parseChartQuery, parseExchangeQuery } from './parser'
 import { ExchangeRate, RateError, RateResolver } from './rate'
@@ -196,32 +196,48 @@ export function apply(ctx: Context, config: Config) {
     if (result.fiatUnavailable) return '汇率目录暂时不可用，请稍后再试。'
     return result.text
   }
+  const chartTheme = () => ({
+    ...defaultTheme,
+    ...(config.chartColorStyle === 'red-up'
+      ? { upColor: defaultTheme.downColor, downColor: defaultTheme.upColor }
+      : {}),
+  })
+  const renderChart = async (source: string, typst: TypstService) => {
+    const svg = await typst.compiler().mainFile('/index.typ').file('/index.typ', source).to('plain-svg')
+    return h.image(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+  }
+  const handleCryptoChart = async (query: { base: string, quote: string }, typst: TypstService) => {
+    await initializeProvider('binance')
+    const direct = catalog.getPair('binance', query.base, query.quote)
+    const reverse = direct ?? catalog.getReversePair('binance', query.base, query.quote)
+    if (!reverse) return '暂不支持该货币对的历史走势。'
+
+    const candles = await fetchCryptoCandles(binance, reverse.id, {
+      timeout: config.timeout,
+      days: config.chartDays,
+    })
+    const oriented = direct ? candles : invertCandles(candles)
+    return renderChart(buildCandlestickSource(query.base, query.quote, oriented, chartTheme()), typst)
+  }
   const handleChartQuery = async (input?: string) => {
     if (!input) return
     const typst: TypstService | undefined = (ctx as { typst?: TypstService }).typst
     if (!typst) return '图表功能需要 typst 服务，请先安装 cordis-plugin-typst。'
     const query = parseChartQuery(input)
     if (!query) return
-    if (!catalog.isFiat(query.base) || !catalog.isFiat(query.quote)) {
-      return '历史走势图暂仅支持法币货币对。'
-    }
 
     try {
-      const series = await fetchHistoryRates(ctx.http, query.base, query.quote, {
-        timeout: config.timeout,
-        days: config.chartDays,
-      })
-      const liveRate = await resolver.getRate(query.base, query.quote)
-        .then((rate) => rate.rate)
-        .catch(() => undefined)
-      const source = buildChartSource(query.base, query.quote, series, {
-        ...defaultTheme,
-        ...(config.chartColorStyle === 'red-up'
-          ? { upColor: defaultTheme.downColor, downColor: defaultTheme.upColor }
-          : {}),
-      }, liveRate)
-      const svg = await typst.compiler().mainFile('/index.typ').file('/index.typ', source).to('plain-svg')
-      return h.image(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+      if (catalog.isFiat(query.base) && catalog.isFiat(query.quote)) {
+        const series = await fetchHistoryRates(ctx.http, query.base, query.quote, {
+          timeout: config.timeout,
+          days: config.chartDays,
+        })
+        const liveRate = await resolver.getRate(query.base, query.quote)
+          .then((rate) => rate.rate)
+          .catch(() => undefined)
+        return renderChart(buildChartSource(query.base, query.quote, series, chartTheme(), liveRate), typst)
+      }
+      return await handleCryptoChart(query, typst)
     } catch (error) {
       if (error instanceof RateError && error.kind === 'unsupported') {
         return '暂不支持该货币对的历史走势。'
@@ -308,7 +324,7 @@ async function formatCryptoProviders(
 
 export { BridgeResolver } from './bridge'
 export { AssetKind, ExchangeCatalog } from './catalog'
-export { buildChartSource, fetchHistoryRates, HistoryPoint } from './chart'
+export { buildCandlestickSource, buildChartSource, defaultTheme, fetchCryptoCandles, fetchHistoryRates, HistoryCandle, HistoryPoint, invertCandles } from './chart'
 export { CryptoResolver, CryptoTicker, parseBinanceTicker, parseOkxTicker } from './crypto'
 export { chartQueryPattern, exchangeQueryPattern, parseChartQuery, parseExchangeQuery } from './parser'
 export { ExchangeRate, RateError, RateResolver } from './rate'
